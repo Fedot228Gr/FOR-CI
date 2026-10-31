@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Neon Survivors — волновой шутер</title>
+<style>
+  body { margin:0; background:#0a0d12; color:#e6edf3; font-family:system-ui,sans-serif;
+         display:flex; flex-direction:column; align-items:center; }
+  #menu { padding:24px; text-align:center; }
+  .diff-btn { background:#1b2330; color:#e6edf3; border:2px solid #2b3a52;
+              padding:10px 18px; margin:4px; border-radius:8px; cursor:pointer; font-size:15px; }
+  .diff-btn.active { border-color:#4aa3ff; background:#24406b; }
+  #start-btn { background:#2ecc71; color:#04160b; border:none; padding:12px 32px;
+               border-radius:8px; font-size:18px; font-weight:bold; cursor:pointer; margin-top:12px; }
+  #diff-info { min-height:20px; color:#9fb3cc; margin-top:8px; }
+  #wrap { position:relative; }
+  canvas { background:#111418; border:1px solid #2b3a52; display:block; }
+  #overlay { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+             flex-direction:column; background:rgba(5,8,12,.8); }
+  #overlay-text { font-size:32px; font-weight:bold; margin-bottom:16px; }
+  #hint { color:#6c7f96; font-size:13px; margin-top:8px; }
+</style>
+</head>
+<body>
+  <div id="menu">
+    <h1>Neon Survivors</h1>
+    <div>
+      <button class="diff-btn" data-diff="easy">1 · Лёгкая</button>
+      <button class="diff-btn active" data-diff="normal">2 · Нормальная</button>
+      <button class="diff-btn" data-diff="hard">3 · Сложная</button>
+      <button class="diff-btn" data-diff="nightmare">4 · Кошмар</button>
+    </div>
+    <div id="diff-info"></div>
+    <button id="start-btn">Старт</button>
+    <div id="hint">WASD — движение · мышь — прицел/огонь · R — перезарядка · 1–4 — смена сложности в бою</div>
+  </div>
+  <div id="wrap">
+    <canvas id="game" width="960" height="600"></canvas>
+    <div id="overlay">
+      <div id="overlay-text"></div>
+      <button id="restart-btn">Заново</button>
+    </div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
