@@ -192,13 +192,96 @@ const DIFFICULTIES = {
 };
 let selectedDifficulty = 'normal'; // выбранная на меню
 let G_DIFF = DIFFICULTIES.normal;  // активная в текущем забеге
+let menuBtnPressed = null;         // 'diff:<id>' | 'play' — для визуального отклика нажатия
 
 function getDiff(id) { return DIFFICULTIES[id] || DIFFICULTIES.normal; }
-function diffBtnRects() {
-  const bw = 220, bh = 90, gap = 25;
-  const totalW = 3 * bw + 2 * gap;
-  const x0 = W / 2 - totalW / 2;
-  return Object.keys(DIFFICULTIES).map((id, i) => ({ id, x: x0 + i * (bw + gap), y: H / 2 + 10, w: bw, h: bh }));
+
+/* =========================================================
+   РАСКЛАДКА ГЛАВНОГО МЕНЮ — адаптивная, без «слипания»
+   Панели и кнопки строятся от размеров экрана (W×H):
+   портрет 720×1280 · ландшафт 1440×810
+   ========================================================= */
+const MENU_PANEL_PAD = 40;
+const MENU_GAP = 26;
+
+function menuPanelRect() {
+  if (W > H) {
+    // Ландшафт: панель занимает ~52% ширины по центру
+    const pw = Math.min(780, W * 0.54);
+    const ph = H - 48;
+    return { x: W / 2 - pw / 2, y: 24, w: pw, h: ph };
+  }
+  // Портрет: высокая колонна
+  const pw = Math.min(640, W - 40);
+  return { x: W / 2 - pw / 2, y: 36, w: pw, h: H - 72 };
+}
+
+function menuLayout() {
+  const p = menuPanelRect();
+  const innerW = p.w - MENU_PANEL_PAD * 2;
+  const land = W > H;
+
+  // Кнопки сложности
+  const dgap = land ? 18 : 16;
+  let dw = Math.floor((innerW - dgap * 2) / 3);
+  let dh = land ? 108 : 124;
+  // Если описания не помещаются по ширине — увеличиваем высоту кнопок
+  ctx.font = '15px system-ui, -apple-system, sans-serif';
+  const maxDescW = dw - 20;
+  const needTall = ['easy', 'normal', 'hard'].some(id =>
+    ctx.measureText(DIFFICULTIES[id].desc).width > maxDescW);
+  if (needTall && !land) dh = 150;
+  else if (needTall && land) dh = 122;
+  const drowW = dw * 3 + dgap * 2;
+  const dx0 = p.x + p.w / 2 - drowW / 2;
+
+  // Кнопка «В БОЙ»
+  const playH = land ? 84 : 100;
+  const playW = land ? Math.min(420, innerW) : Math.min(innerW, 460);
+
+  let diffLabelY, diffY, playY, titleSize, subtitleSize, figuresY, footerY;
+  if (land) {
+    titleSize = 46; subtitleSize = 19;
+    const titleY1 = p.y + 62;
+    const ornamentY = titleY1 + titleSize * 1.18 * 2 + 46;
+    diffLabelY = ornamentY + 34;
+    diffY = diffLabelY + 22;
+    playY = diffY + dh + 26;
+    // в ландшафте фигуры стоят по бокам панели (не пересекаются с кнопками)
+    figuresY = p.y + p.h * 0.62;
+    footerY = p.y + p.h - 24;
+  } else {
+    titleSize = 64; subtitleSize = 24;
+    const titleY1 = p.y + 118;
+    figuresY = titleY1 + 300;
+    diffLabelY = figuresY + 104;
+    diffY = diffLabelY + 30;
+    playY = diffY + dh + MENU_GAP + 10;
+    footerY = playY + playH + 52;
+  }
+
+  const diffs = ['easy', 'normal', 'hard'].map((id, i) => ({
+    id, x: dx0 + i * (dw + dgap), y: diffY, w: dw, h: dh
+  }));
+  const play = { x: p.x + p.w / 2 - playW / 2, y: playY, w: playW, h: playH };
+  let figL, figR;
+  if (land) {
+    figL = { x: p.x + 92, y: figuresY };
+    figR = { x: p.x + p.w - 92, y: figuresY };
+  } else {
+    figL = { x: W / 2 - 130, y: figuresY };
+    figR = { x: W / 2 + 130, y: figuresY };
+  }
+  return { panel: p, diffs, play, titleSize, subtitleSize, figuresY, diffLabelY, footerY, land, figL, figR };
+}
+
+function diffBtnRects() { return menuLayout().diffs; }
+
+function overBtnRect() {
+  // кнопка «ЗАНОВО» на экране итогов — адаптивная
+  const bw = W > H ? 360 : Math.min(420, W - 80);
+  const bh = W > H ? 76 : 92;
+  return { x: W / 2 - bw / 2, y: H / 2 + (W > H ? 110 : 150), w: bw, h: bh };
 }
 
 const ALL_CARDS = [
@@ -2301,17 +2384,27 @@ canvas.addEventListener('pointerdown', (e) => {
 function handleTap(x, y) {
   if (G.phase === 'defeat') return;
   if (G.scene === 'menu') {
+    const M = menuLayout();
     // Выбор сложности (три варианта)
-    for (const r of diffBtnRects()) {
-      if (inRect(x, y, r.x, r.y, r.w, r.h)) { selectedDifficulty = r.id; return; }
+    for (const r of M.diffs) {
+      if (inRect(x, y, r.x, r.y, r.w, r.h)) {
+        selectedDifficulty = r.id;
+        menuBtnPressed = 'diff:' + r.id;
+        setTimeout(() => { if (menuBtnPressed === 'diff:' + r.id) menuBtnPressed = null; }, 140);
+        return;
+      }
     }
-    const bx = W/2 - 190, by = H/2 + 130, bw = 380, bh = 120;
-    if (inRect(x, y, bx, by, bw, bh)) { G.scene = 'game'; resetGame(); }
+    const pb = M.play;
+    if (inRect(x, y, pb.x, pb.y, pb.w, pb.h)) {
+      menuBtnPressed = 'play';
+      G.scene = 'game'; resetGame();
+      setTimeout(() => { if (menuBtnPressed === 'play') menuBtnPressed = null; }, 160);
+    }
     return;
   }
   if (G.scene === 'over') {
-    const bx = W/2 - 190, by = H/2 + 130, bw = 380, bh = 120;
-    if (inRect(x, y, bx, by, bw, bh)) { G.scene = 'game'; resetGame(); }
+    const ob = overBtnRect();
+    if (inRect(x, y, ob.x, ob.y, ob.w, ob.h)) { G.scene = 'game'; resetGame(); }
     return;
   }
   if (G.phase === 'upgrade') {
@@ -3067,58 +3160,233 @@ function render(realDt) {
   }
 }
 
-function renderMenu() {
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 84px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#f1c40f';
-  ctx.fillText('СЛАВЯНСКИЕ', W/2, H/2 - 280);
-  ctx.fillText('КОРОНЫ', W/2, H/2 - 190);
-  ctx.font = '28px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#d5d8dc';
-  ctx.fillText('Защити Детинец от нечисти', W/2, H/2 - 100);
-  
-  drawFigure('sword', W/2 - 130, H/2 + 30, 1, G.time, false, 0, false, 0, 1, 0);
-  drawFigure('goblin', W/2 + 130, H/2 + 30, -1, G.time, false, 0, false, 0, 1, 0);
-  
-  const bx = W/2 - 190, by = H/2 + 130, bw = 380, bh = 120;
-  ctx.fillStyle = '#641e16';
-  roundRect(bx, by, bw, bh, 16); ctx.fill();
-  ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 4;
-  roundRect(bx, by, bw, bh, 16); ctx.stroke();
-  ctx.font = 'bold 48px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('В БОЙ', W/2, by + bh/2);
-  ctx.font = '22px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#d5d8dc';
-  ctx.fillText('13 юнитов · поле 5×5 · 10 волн', W/2, H/2 + 315);
+/* ---- вспомогательные функции красивого меню ---- */
+function hexToRgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+function fitText(text, maxW, baseFont, minSize) {
+  const m = baseFont.match(/^(\S+\s+)?(\d+)px\s(.*)$/);
+  const prefix = m[1] || '', family = m[3];
+  let size = parseInt(m[2], 10);
+  ctx.font = baseFont;
+  while (ctx.measureText(text).width > maxW && size > minSize) {
+    size -= 1;
+    ctx.font = prefix + size + 'px ' + family;
+  }
+  return size;
+}
+function drawWoodPanel(x, y, w, h, r) {
+  // деревянная панель с теплым внутренним светом и двойной окантовкой
+  const grad = ctx.createLinearGradient(x, y, x, y + h);
+  grad.addColorStop(0, '#2e2013');
+  grad.addColorStop(0.5, '#241812');
+  grad.addColorStop(1, '#1c120c');
+  roundRect(x, y, w, h, r); ctx.fillStyle = grad; ctx.fill();
+  const glow = ctx.createRadialGradient(x + w / 2, y + h * 0.35, 10, x + w / 2, y + h * 0.35, Math.max(w, h) * 0.7);
+  glow.addColorStop(0, 'rgba(241, 196, 15, 0.07)');
+  glow.addColorStop(1, 'rgba(241, 196, 15, 0)');
+  roundRect(x, y, w, h, r); ctx.fillStyle = glow; ctx.fill();
+  ctx.strokeStyle = 'rgba(241, 196, 15, 0.55)'; ctx.lineWidth = 3;
+  roundRect(x, y, w, h, r); ctx.stroke();
+  ctx.strokeStyle = 'rgba(241, 196, 15, 0.16)'; ctx.lineWidth = 1.5;
+  roundRect(x + 7, y + 7, w - 14, h - 14, Math.max(4, r - 6)); ctx.stroke();
+}
+function drawOrnament(cx, cy, color) {
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(cx - 90, cy); ctx.lineTo(cx - 16, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + 16, cy); ctx.lineTo(cx + 90, cy); ctx.stroke();
+  ctx.translate(cx, cy); ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = color;
+  roundRect(-7, -7, 14, 14, 3); ctx.fill();
+  ctx.strokeStyle = 'rgba(26, 18, 11, 0.9)'; ctx.lineWidth = 2;
+  roundRect(-7, -7, 14, 14, 3); ctx.stroke();
+  ctx.restore();
+}
+function menuButtonBase(x, y, w, h, pressed, hovered) {
+  const dy = pressed ? 3 : (hovered ? -2 : 0);
+  return { x, y: y + dy, w, h };
+}
 
-  // ===== Выбор сложности: три варианта =====
-  ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+function renderMenu() {
+  const M = menuLayout();
+  const p = M.panel;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // === общая деревянная панель — все элементы внутри, ничего не слипается ===
+  drawWoodPanel(p.x, p.y, p.w, p.h, 26);
+
+  // === заголовок с градиентом и тенью ===
+  const titleY1 = p.y + (M.land ? 74 : 118);
+  const lh = M.titleSize * 1.18;
+  ctx.font = `bold ${M.titleSize}px system-ui, -apple-system, sans-serif`;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillText('СЛАВЯНСКИЕ', W/2 + 3, titleY1 + 3);
+  ctx.fillText('КОРОНЫ', W/2 + 3, titleY1 + lh + 3);
+  const tg = ctx.createLinearGradient(0, titleY1 - M.titleSize * 0.6, 0, titleY1 + lh + M.titleSize * 0.6);
+  tg.addColorStop(0, '#ffe9a8');
+  tg.addColorStop(0.5, '#f1c40f');
+  tg.addColorStop(1, '#c9971b');
+  ctx.fillStyle = tg;
+  ctx.fillText('СЛАВЯНСКИЕ', W/2, titleY1);
+  ctx.fillText('КОРОНЫ', W/2, titleY1 + lh);
+
+  ctx.font = `${M.subtitleSize}px system-ui, -apple-system, sans-serif`;
+  ctx.fillStyle = '#cbb894';
+  ctx.fillText('Защити Детинец от нечисти', W/2, titleY1 + lh * 2 + 20);
+
+  drawOrnament(W/2, titleY1 + lh * 2 + 50, 'rgba(241, 196, 15, 0.7)');
+
+  // === витрина: боярин против беса ===
+  const idleBob = Math.sin(G.time * 2.2) * 2;
+  if (!M.land) {
+    // портрет: оба на «земляном валу» по центру
+    const fy = M.figuresY;
+    const groundGrad = ctx.createLinearGradient(0, fy - 14, 0, fy + 26);
+    groundGrad.addColorStop(0, '#4a3520');
+    groundGrad.addColorStop(1, '#2a1c10');
+    ctx.fillStyle = groundGrad;
+    ctx.beginPath();
+    ctx.ellipse(W/2, fy + 10, 265, 24, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(241, 196, 15, 0.22)'; ctx.lineWidth = 2;
+    ctx.stroke();
+    drawFigure('sword', M.figL.x, fy - 2 + idleBob, 1, G.time, false, 0, false, 0, 1, 0);
+    drawFigure('goblin', M.figR.x, fy - 2 - idleBob, -1, G.time, false, 0, false, 0, 1, 0);
+  } else {
+    // ландшафт: по бокам панели, каждый на своём основании
+    for (const f of [M.figL, M.figR]) {
+      const groundGrad = ctx.createLinearGradient(0, f.y - 10, 0, f.y + 20);
+      groundGrad.addColorStop(0, '#4a3520');
+      groundGrad.addColorStop(1, '#2a1c10');
+      ctx.fillStyle = groundGrad;
+      ctx.beginPath();
+      ctx.ellipse(f.x, f.y + 8, 88, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(241, 196, 15, 0.22)'; ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    drawFigure('sword', M.figL.x, M.figL.y - 2 + idleBob, 1, G.time, false, 0, false, 0, 1, 0);
+    drawFigure('goblin', M.figR.x, M.figR.y - 2 - idleBob, -1, G.time, false, 0, false, 0, 1, 0);
+  }
+
+  // === выбор сложности: три карточки ===
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
   ctx.fillStyle = '#f1c40f';
-  ctx.fillText('СЛОЖНОСТЬ', W/2, H/2 - 35);
-  const dRects = diffBtnRects();
-  for (const r of dRects) {
+  ctx.fillText('СЛОЖНОСТЬ', W/2, M.diffLabelY);
+
+  for (const r of M.diffs) {
     const d = DIFFICULTIES[r.id];
     const sel = selectedDifficulty === r.id;
     const hovered = inRect(mouseX, mouseY, r.x, r.y, r.w, r.h);
-    ctx.fillStyle = sel ? d.color : (hovered ? '#3a2c1c' : '#241a10');
-    roundRect(r.x, r.y, r.w, r.h, 14); ctx.fill();
-    ctx.strokeStyle = sel ? d.stroke : '#5d4a34';
-    ctx.lineWidth = sel ? 5 : 2;
-    roundRect(r.x, r.y, r.w, r.h, 14); ctx.stroke();
-    ctx.textAlign = 'center';
-    ctx.font = 'bold 30px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = sel ? '#ffffff' : '#c8b89a';
-    ctx.fillText(d.icon + ' ' + d.name, r.x + r.w / 2, r.y + 38);
-    ctx.font = '16px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = sel ? '#f5e6c8' : '#8a7a63';
-    ctx.fillText(d.desc, r.x + r.w / 2, r.y + 68);
+    const pressed = menuBtnPressed === 'diff:' + r.id;
+    const b = menuButtonBase(r.x, r.y, r.w, r.h, pressed, hovered);
+
+    if (!pressed) {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      roundRect(b.x + 2, b.y + 5, b.w, b.h, 16); ctx.fill();
+    }
+    const bg = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
     if (sel) {
-      ctx.font = 'bold 18px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = d.stroke;
-      ctx.fillText('✔', r.x + r.w - 18, r.y + 24);
+      bg.addColorStop(0, hexToRgba(d.color, 0.95));
+      bg.addColorStop(1, hexToRgba(d.color, 0.6));
+    } else if (hovered) {
+      bg.addColorStop(0, '#3b2c1a'); bg.addColorStop(1, '#2c2013');
+    } else {
+      bg.addColorStop(0, '#2a1d10'); bg.addColorStop(1, '#201509');
+    }
+    roundRect(b.x, b.y, b.w, b.h, 16); ctx.fillStyle = bg; ctx.fill();
+    ctx.strokeStyle = sel ? d.stroke : 'rgba(160, 130, 90, 0.45)';
+    ctx.lineWidth = sel ? 3.5 : 2;
+    roundRect(b.x, b.y, b.w, b.h, 16); ctx.stroke();
+
+    // верхняя цветовая полоска — уровень читается даже без текста
+    ctx.save();
+    roundRect(b.x, b.y, b.w, b.h, 16); ctx.clip();
+    ctx.fillStyle = sel ? d.stroke : hexToRgba(d.color, 0.85);
+    ctx.fillRect(b.x, b.y, b.w, 6);
+    ctx.restore();
+
+    // название уровня
+    ctx.font = `bold ${Math.min(24, Math.floor(b.h * 0.2))}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = sel ? '#ffffff' : '#e6d3ac';
+    ctx.fillText(d.icon + ' ' + d.name.toUpperCase(), b.x + b.w / 2, b.y + b.h * 0.30);
+
+    // тонкий разделитель
+    ctx.strokeStyle = sel ? 'rgba(255,255,255,0.28)' : 'rgba(160,130,90,0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(b.x + b.w * 0.18, b.y + b.h * 0.47);
+    ctx.lineTo(b.x + b.w * 0.82, b.y + b.h * 0.47);
+    ctx.stroke();
+
+    // описание — при необходимости перенос по словам
+    ctx.fillStyle = sel ? '#fdf3d8' : '#9b8a70';
+    const descMaxW = b.w - 18;
+    const descWords = d.desc.split(' ');
+    let lines = [d.desc];
+    ctx.font = '15px system-ui, -apple-system, sans-serif';
+    if (ctx.measureText(d.desc).width > descMaxW && descWords.length > 1) {
+      const mid = Math.ceil(descWords.length / 2);
+      const l1 = descWords.slice(0, mid).join(' '), l2 = descWords.slice(mid).join(' ');
+      lines = (ctx.measureText(l1).width <= descMaxW && ctx.measureText(l2).width <= descMaxW)
+        ? [l1, l2]
+        : [descWords[0], descWords.slice(1).join(' ')];
+    }
+    const longest = lines.reduce((a, c) => a.length >= c.length ? a : c, '');
+    const descSize = fitText(longest, descMaxW, '15px system-ui, -apple-system, sans-serif', 10);
+    ctx.font = `${descSize}px system-ui, -apple-system, sans-serif`;
+    const lineH = descSize * 1.3;
+    const descCenterY = b.y + b.h * (lines.length > 1 ? 0.73 : 0.71);
+    lines.forEach((ln, i) => {
+      ctx.fillText(ln, b.x + b.w / 2, descCenterY + (i - (lines.length - 1) / 2) * lineH);
+    });
+
+    // круглая галочка выбора
+    if (sel) {
+      const ccx = b.x + b.w - 18, ccy = b.y + 20, cr = 11;
+      ctx.beginPath(); ctx.arc(ccx, ccy, cr, 0, Math.PI * 2);
+      ctx.fillStyle = d.stroke; ctx.fill();
+      ctx.strokeStyle = 'rgba(26,18,11,0.85)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(ccx - 5, ccy); ctx.lineTo(ccx - 1, ccy + 4.5); ctx.lineTo(ccx + 6, ccy - 4);
+      ctx.stroke();
     }
   }
+
+  // === большая кнопка «В БОЙ» с пульсирующим свечением ===
+  {
+    const pb = menuButtonBase(M.play.x, M.play.y, M.play.w, M.play.h,
+      menuBtnPressed === 'play', inRect(mouseX, mouseY, M.play.x, M.play.y, M.play.w, M.play.h));
+    const pulse = 0.5 + 0.5 * Math.sin(G.time * 2.4);
+    ctx.save();
+    ctx.shadowColor = 'rgba(241, 196, 15, ' + (0.3 + pulse * 0.3) + ')';
+    ctx.shadowBlur = 20 + pulse * 10;
+    const g = ctx.createLinearGradient(pb.x, pb.y, pb.x, pb.y + pb.h);
+    g.addColorStop(0, '#8a2b1e'); g.addColorStop(0.5, '#6d1f14'); g.addColorStop(1, '#521510');
+    roundRect(pb.x, pb.y, pb.w, pb.h, 18); ctx.fillStyle = g; ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3.5;
+    roundRect(pb.x, pb.y, pb.w, pb.h, 18); ctx.stroke();
+    ctx.save();
+    roundRect(pb.x, pb.y, pb.w, pb.h, 18); ctx.clip();
+    const sh = ctx.createLinearGradient(pb.x, pb.y, pb.x, pb.y + pb.h * 0.45);
+    sh.addColorStop(0, 'rgba(255,255,255,0.16)'); sh.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sh; ctx.fillRect(pb.x, pb.y, pb.w, pb.h * 0.45);
+    ctx.restore();
+    const fs = Math.min(38, Math.floor(pb.h * 0.4));
+    ctx.font = `bold ${fs}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText('\u2694  В БОЙ  \u2694', pb.x + pb.w / 2, pb.y + pb.h / 2 - 1);
+  }
+
+  // === подпись снизу ===
+  ctx.font = '19px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#8f7f68';
+  ctx.fillText('13 юнитов · поле 5×5 · 10 волн', W/2, M.footerY);
 }
 
 function renderGame() {
@@ -3702,14 +3970,15 @@ function renderOver() {
   if (G.win) drawFigure('sword', W/2, H/2 + 20, 1, G.time, false, 0, false, 0, 1, 0);
   else drawFigure('goblin', W/2, H/2 + 20, 1, G.time, false, 0, false, 0, 1, 0);
 
-  const bx = W/2 - 190, by = H/2 + 130, bw = 380, bh = 120;
-  ctx.fillStyle = '#2c3e50';
-  roundRect(bx, by, bw, bh, 16); ctx.fill();
-  ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 4;
-  roundRect(bx, by, bw, bh, 16); ctx.stroke();
-  ctx.font = 'bold 46px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('ЗАНОВО', W/2, by + bh/2);
+  const ob = overBtnRect();
+  const g = ctx.createLinearGradient(ob.x, ob.y, ob.x, ob.y + ob.h);
+  g.addColorStop(0, '#3d566e'); g.addColorStop(1, '#22303f');
+  roundRect(ob.x, ob.y, ob.w, ob.h, 16); ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3.5;
+  roundRect(ob.x, ob.y, ob.w, ob.h, 16); ctx.stroke();
+  ctx.font = `bold ${Math.min(40, Math.floor(ob.h * 0.45))}px system-ui, -apple-system, sans-serif`;
+  ctx.fillStyle = '#ffe9a8';
+  ctx.fillText('ЗАНОВО', W/2, ob.y + ob.h/2);
 
   const entries = Object.entries(G.upgradeCount);
   if (entries.length > 0) {
