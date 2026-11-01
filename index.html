@@ -3960,6 +3960,11 @@ function drawHandCards() {
     ctx.strokeStyle = card.color; ctx.lineWidth = 4;
     roundRect(cx, cy, cw, ch, 14); ctx.stroke();
 
+    // Крестик «снятия выбора» для ВЫБРАННОЙ карты. Рисовался поверх названия
+    // и статов и перекрывал их — убран; выбор уже показан подъёмом карты,
+    // увеличением и подсветкой рамки (см. selected/lift выше), отмена —
+    // повторным тапом по карте (selectCard переключает selectedIndex).
+
     if (LAYOUT.mode === 'portrait') {
       drawFigure(card.id, cx + cw / 2, cy + 148, 1, G.time, false, 0, false, 0, 1, 0);
       
