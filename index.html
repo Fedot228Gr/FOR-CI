@@ -60,28 +60,42 @@ function computeLayout() {
     CELL = 88;
     GRID_X = 180;
     GRID_Y = 240;                       // сдвинуто вниз: освобождён верхний HUD
-    CASTLE_X = 80;
+    // КРЕПОСТЬ привязана к СЕТКЕ: полоса HP рисуется на 32px выше GRID_Y,
+    // значит гарантированно под строкой инфы HUD (infoY) и над полем.
+    CASTLE_X = 92;                      // центр башни: левый край HP-бара = 92-65 = 27 ≥ ARENA_X
     CASTLE_W = 100;
-    CASTLE_TOP = GRID_Y;               // привязано к сетке — при переносе поля ничего не наезжает на HUD
+    // Купол+крест занимают ~110px над CASTLE_TOP, HP-бар — ещё ~50px выше.
+    // Зона HUD в ландшафте заканчивается на y=110 (infoY) — ставим крепость так,
+    // чтобы верхняя точка креста не залезала под HUD.
+    CASTLE_TOP = 230;                   // верх частокола; бар будет на y≈120
     CASTLE_BOTTOM = GRID_Y + 5 * CELL;
     ARENA_X = 20;
     ARENA_Y = GRID_Y - 30;             // арена тоже привязана к сетке
     ARENA_W = GRID_X + 5 * CELL - ARENA_X + 20;
     ARENA_H = CASTLE_BOTTOM - ARENA_Y + 20;
+    // Карты руки: три строки гарантированно влезают в высоту канваса
+    // (3*cardH + 2*cardGap <= H - cardY - 10). Иначе — уменьшаем cardH.
+    let lCardH = 200;
+    const lMaxCardH = Math.floor((H - 240 - 2 * 20 - 10) / 3);
+    if (lCardH > lMaxCardH) lCardH = Math.max(120, lMaxCardH);
+    // Кнопки «В БОЙ»/«Реролл» — строго в правом столбце между картами руки
+    // (x≥690) и правым краем: не пересекают ни карты, ни поле, ни друг друга.
     LAYOUT = {
       mode: 'landscape',
-      btn: { x: 1160, y: 30, w: 250, h: 60 },
-      rerollBtn: { x: 1160, y: 100, w: 250, h: 60 },
-      cardX: 690, cardY: 240, cardW: 720, cardH: 200, cardGap: 20,
+      btn: { x: 960, y: 120, w: 200, h: 56 },
+      rerollBtn: { x: 1180, y: 120, w: 200, h: 56 },
+      cardX: 690, cardY: 240, cardW: 720, cardH: lCardH, cardGap: 20,
       hudY: 50, infoY: 100
     };
   } else {
     W = 720; H = 1280;
     GRID_X = 130; GRID_Y = 300; CELL = 105;
-    // КРЕПОСТЬ: башня смещена влевее и ниже, чтобы её HP-бар и купол
-    // НЕ перекрывали кнопку «В БОЙ» (x 130..410, y 170..250) и золотой HUD.
-    CASTLE_X = 58; CASTLE_W = 74; CASTLE_TOP = 340; CASTLE_BOTTOM = 690;
-    ARENA_X = 15; ARENA_Y = 270; ARENA_W = 690; ARENA_H = 590;
+    // КРЕПОСТЬ в портрете: купол+крест занимают ~110px над CASTLE_TOP,
+    // HP-бар — ещё ~50px выше него. При GRID_Y-150 верх уходил за край
+    // экрана (y≈-80). Ставим частокол на y=250: бар ≈140, крест ≈90 —
+    // ниже строки инфо HUD (infoY=110 рисует базовую линию текста).
+    CASTLE_X = 66; CASTLE_W = 74; CASTLE_TOP = 250; CASTLE_BOTTOM = GRID_Y + 5 * CELL;
+    ARENA_X = 15; ARENA_Y = GRID_Y - 30; ARENA_W = 690; ARENA_H = 5 * CELL + 50;
     LAYOUT = {
       mode: 'portrait',
       btn: { x: W/2 - 230, y: 170, w: 280, h: 80 },
@@ -194,109 +208,143 @@ const DIFFICULTIES = {
 };
 let selectedDifficulty = 'normal'; // выбранная на меню
 let G_DIFF = DIFFICULTIES.normal;  // активная в текущем забеге
-let menuBtnPressed = null;         // 'diff:<id>' | 'play' — для визуального отклика нажатия
+let menuBtnPressed = null;         // 'diff:<id>' | 'play' | 'menu' — визуальный отклик нажатия
+
+// Шрифты карточек сложности — ЕДИНСТВЕННЫЙ источник правды:
+// их используют и menuLayout() при измерении текста, и renderMenu() при отрисовке.
+const MENU_NAME_FONT_SIZE = 22;
+const MENU_DESC_FONT_SIZE = 15;
+const MENU_UI_FONT = 'system-ui, -apple-system, sans-serif';
+const menuNameFont = (s = MENU_NAME_FONT_SIZE) => `bold ${s}px ${MENU_UI_FONT}`;
+const menuDescFont = (s = MENU_DESC_FONT_SIZE) => `${s}px ${MENU_UI_FONT}`;
 
 function getDiff(id) { return DIFFICULTIES[id] || DIFFICULTIES.normal; }
 
 /* =========================================================
-   РАСКЛАДКА ГЛАВНОГО МЕНЮ — адаптивная, без «слипания»
-   Панели и кнопки строятся от размеров экрана (W×H):
-   портрет 720×1280 · ландшафт 1440×810
+   РАСКЛАДКА ГЛАВНОГО МЕНЮ — адаптивная, без наложений
+   Ключевое отличие от прошлой версии: все блоки складываются
+   ВЕРТИКАЛЬНЫМ ПОТОКОМ с фиксированными зазорами, поэтому они
+   физически не могут пересечься ни при каких размерах экрана.
+   Панель всегда целиком внутри холста W×H.
    ========================================================= */
-const MENU_PANEL_PAD = 40;
-const MENU_GAP = 26;
+const MENU_GAP = 24;          // зазор между блоками потока
+const MENU_TEXT_WRAP = 30;    // запас для переноса длинных описаний
 
-function menuPanelRect() {
-  if (W > H) {
-    // Ландшафт: панель занимает ~52% ширины по центру
-    const pw = Math.min(780, W * 0.54);
-    const ph = H - 48;
-    return { x: W / 2 - pw / 2, y: 24, w: pw, h: ph };
-  }
-  // Портрет: высокая колонна
-  const pw = Math.min(640, W - 40);
-  return { x: W / 2 - pw / 2, y: 36, w: pw, h: H - 72 };
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
 function menuLayout() {
-  const p = menuPanelRect();
-  const innerW = p.w - MENU_PANEL_PAD * 2;
   const land = W > H;
 
-  // === Кнопки сложности: размеры подбираются ПОД РЕАЛЬНЫЙ ТЕКСТ ===
-  // (раньше фиксированная высота приводила к тому, что надпись на карточке
-  //  «Нормально» вылезала за границы кнопки)
-  const dgap = land ? 18 : 16;
+  // --- панель: сначала верх/низ, затем ширина/высота, чтобы влез весь поток ---
+  const pTop = land ? 16 : 28;
+  const pBot = H - (land ? 16 : 28);
+  const pw = land ? Math.min(760, W * 0.5) : Math.min(660, W - 24);
+  const p = { x: W / 2 - pw / 2, y: pTop, w: pw, h: pBot - pTop };
+  const innerW = pw - 96; // боковые поля панели
+
+  // --- размеры текстовых блоков ---
+  const titleSize = land ? 44 : 60;
+  const lh = titleSize * 1.18;                 // высота строки заголовка
+  const subtitleSize = land ? 18 : 22;
+  const labelSize = 22;
+  const footerSize = 16;
+
+  // витрина персонажей (фигуры ~130px высотой + основание)
+  const figBand = land ? 120 : 170;
+
+  // --- карточки сложности: высота подбирается ПОД РЕАЛЬНЫЙ ТЕКСТ ---
+  const dgap = land ? 16 : 14;
   const dw = Math.floor((innerW - dgap * 2) / 3);
-  const nameFont = 'bold 22px system-ui, -apple-system, sans-serif';
-  const descFont = '15px system-ui, -apple-system, sans-serif';
-  let needNameWrap = false, needDescWrap = false;
+  let nameLines = 1, descLines = 1;
   for (const id of ['easy', 'normal', 'hard']) {
     const d = DIFFICULTIES[id];
-    ctx.font = nameFont;
-    if (ctx.measureText(d.icon + ' ' + d.name.toUpperCase()).width > dw - 16) needNameWrap = true;
-    ctx.font = descFont;
-    if (ctx.measureText(d.desc).width > dw - 20) needDescWrap = true;
+    ctx.font = menuNameFont();
+    if (ctx.measureText(d.icon + ' ' + d.name.toUpperCase()).width > dw - 16) nameLines = 2;
+    ctx.font = menuDescFont();
+    if (ctx.measureText(d.desc).width > dw - 2 * MENU_TEXT_WRAP) descLines = 2;
   }
-  // базовая высота + место под вторую строку названия и/или описания
-  let dh = (land ? 96 : 104);
-  if (needNameWrap) dh += 26;
-  if (needDescWrap) dh += 22;
-  const drowW = dw * 3 + dgap * 2;
-  const dx0 = p.x + p.w / 2 - drowW / 2;
+  const dh = 14 + MENU_NAME_FONT_SIZE + 8 + descLines * (MENU_DESC_FONT_SIZE * 1.3) + 10;
+  const diffRow = { w: dw * 3 + dgap * 2 };
 
-  // Кнопка «В БОЙ»
-  const playH = land ? 84 : 100;
-  const playW = land ? Math.min(420, innerW) : Math.min(innerW, 460);
+  // кнопка «В БОЙ»
+  const playH = land ? 78 : 92;
+  const playW = Math.min(innerW, 460);
 
-  let diffLabelY, diffY, playY, titleSize, subtitleSize, figuresY, footerY;
-  if (land) {
-    titleSize = 46; subtitleSize = 19;
-    const titleY1 = p.y + 62;
-    const ornamentY = titleY1 + titleSize * 1.18 * 2 + 46;
-    diffLabelY = ornamentY + 34;
-    diffY = diffLabelY + 22;
-    playY = diffY + dh + 26;
-    // в ландшафте фигуры стоят по бокам панели (не пересекаются с кнопками)
-    figuresY = p.y + p.h * 0.62;
-    footerY = p.y + p.h - 24;
-  } else {
-    titleSize = 64; subtitleSize = 24;
-    const titleY1 = p.y + 118;
-    figuresY = titleY1 + 292;
-    diffLabelY = figuresY + 100;
-    diffY = diffLabelY + 30;
-    playY = diffY + dh + MENU_GAP + 10;
-    footerY = playY + playH + 52;
-  }
+  // вертикальный поток: сверху вниз, каждый блок ниже предыдущего на MENU_GAP
+  let y = p.y + (land ? 26 : 34);
+  const titleY1 = y + titleSize * 0.6;            // базовая линия 1-й строки (middle)
+  y += lh * 2;                                    // две строки заголовка
+  const subtitleY = y + subtitleSize * 0.8;
+  y += subtitleSize + 14;
+  const ornamentY = y + 8;
+  y = ornamentY + 14;
+  const figuresRect = { x: p.x, y, w: p.w, h: figBand };
+  const figuresY = y + figBand - 18;              // «земля» под ногами фигур
+  y += figBand + MENU_GAP;
+  const diffLabelY = y + labelSize * 0.6;
+  y += labelSize + 12;
+  const diffsY = y;
+  const diffsRect = { x: p.x + (p.w - diffRow.w) / 2, y: diffsY, w: diffRow.w, h: dh };
+  y += dh + MENU_GAP;
+  const playRect = { x: p.x + (p.w - playW) / 2, y, w: playW, h: playH };
+  y += playH + 18;
+  const footerY = y + footerSize * 0.6;
+  y += footerSize + (land ? 20 : 26);             // нижнее поле панели
+
+  // если поток всё же выше панели (маленький экран) — растим панель до H
+  if (y > p.y + p.h) { p.h = Math.min(H - 8 - p.y, y); }
 
   const diffs = ['easy', 'normal', 'hard'].map((id, i) => ({
-    id, x: dx0 + i * (dw + dgap), y: diffY, w: dw, h: dh
+    id, x: diffsRect.x + i * (dw + dgap), y: diffsY, w: dw, h: dh
   }));
-  const play = { x: p.x + p.w / 2 - playW / 2, y: playY, w: playW, h: playH };
+
+  // фигуры: в портрете — по центру полосы (под ними вал, над ними — ничего);
+  // в ландшафте — в боковых полях ПАНЕЛИ, вне центрального блока кнопок
   let figL, figR;
   if (land) {
-    // фигуры ПОВЕРХ панели, но в боковых полях — между краем панели и
-    // центральным блоком кнопок (гарантированный зазор >= 30px)
-    const blockHalf = Math.max(drowW, playW) / 2;
-    const sideSpace = (p.w - blockHalf * 2) / 2 - MENU_PANEL_PAD;
-    const figInset = Math.max(64, Math.min(110, sideSpace - 30));
-    figL = { x: p.x + figInset, y: figuresY };
-    figR = { x: p.x + p.w - figInset, y: figuresY };
+    const blockHalf = Math.max(diffRow.w, playW) / 2;
+    const sideSpace = (p.w - blockHalf * 2) / 2;
+    const inset = Math.max(56, Math.min(104, sideSpace - 26));
+    figL = { x: p.x + inset, y: figuresY };
+    figR = { x: p.x + p.w - inset, y: figuresY };
   } else {
-    figL = { x: W / 2 - 130, y: figuresY };
-    figR = { x: W / 2 + 130, y: figuresY };
+    figL = { x: W / 2 - 128, y: figuresY };
+    figR = { x: W / 2 + 128, y: figuresY };
   }
-  return { panel: p, diffs, play, titleSize, subtitleSize, figuresY, diffLabelY, footerY, land, figL, figR };
+
+  return {
+    panel: p, diffs, diffsRect, play: playRect, figureBand: figuresRect,
+    titleSize, subtitleSize, labelSize, footerSize,
+    titleY1, subtitleY, ornamentY, figuresY, diffLabelY, footerY,
+    land, figL, figR, nameFont: menuNameFont(), descFont: menuDescFont(),
+    nameFontSize: MENU_NAME_FONT_SIZE, descFontSize: MENU_DESC_FONT_SIZE,
+    textWrapPad: MENU_TEXT_WRAP,
+  };
 }
 
 function diffBtnRects() { return menuLayout().diffs; }
 
+function overPanelRect() {
+  // центральная панель экрана итогов: место под две кнопки в столбик
+  const pw = W > H ? 620 : Math.min(560, W - 40);
+  const ph = W > H ? 470 : 620;
+  return { x: W / 2 - pw / 2, y: H / 2 - ph / 2, w: pw, h: ph };
+}
+
 function overBtnRect() {
-  // кнопка «ЗАНОВО» на экране итогов — адаптивная
-  const bw = W > H ? 360 : Math.min(420, W - 80);
-  const bh = W > H ? 76 : 92;
-  return { x: W / 2 - bw / 2, y: H / 2 + (W > H ? 110 : 150), w: bw, h: bh };
+  // кнопка «ЗАНОВО» — главная, строго внутри панели (верхняя из двух)
+  const p = overPanelRect();
+  const bw = Math.min(p.w - 80, 420);
+  const bh = W > H ? 66 : 78;
+  return { x: W / 2 - bw / 2, y: p.y + p.h - bh * 2 - 34, w: bw, h: bh };
+}
+
+function toMenuBtnRect() {
+  // кнопка «В МЕНЮ» — второстепенная, ровно под «ЗАНОВО», та же ширина
+  const z = overBtnRect();
+  return { x: z.x, y: z.y + z.h + 14, w: z.w, h: Math.round(z.h * 0.72) };
 }
 
 const ALL_CARDS = [
@@ -2000,11 +2048,12 @@ function drawCastle() {
 
   ctx.restore();
 
-  // HP-бар
+  // HP-бар: привязан к СЕТКЕ, а не к башне — всегда в зазоре между
+  // частоколом (CASTLE_TOP) и первой линией клеток (GRID_Y), никуда не уползает.
   const barW = w + 30;
   const barH = 14;
   const barX = cx - barW / 2;
-  const barY = towerTop - 80;
+  const barY = Math.max(6, GRID_Y - 32);
 
   ctx.fillStyle = 'rgba(0,0,0,0.85)';
   roundRect(barX - 3, barY - 3, barW + 6, barH + 6, 6); ctx.fill();
@@ -2385,9 +2434,10 @@ function applyUpgrade(card) {
   }
   G.upgradeCount[card.id] = (G.upgradeCount[card.id] || 0) + 1;
   for (const u of G.units) if (u.team === 'player') applyUpgradesToUnit(u);
-  
-  const colorByKind = { sword:'#c0392b', archer:'#27ae60', mage:'#8e44ad', wall:'#8e5a3b', bomb:'#d35400', spearman:'#f39c12', assassin:'#2c3e50', healer:'#1abc9c', fanatic:'#641e16', shepherd:'#f1c40f', strelets:'#e74c3c', tower:'#7f8c8d', mortar:'#95a5a6', all:'#facc15', gold:'#fbbf24', castle:'#fde047' };
-  spawnUpgradeText(card.icon + ' ' + card.name, colorByKind[card.kind] || '#facc15');
+
+  // Всплывающий текст НЕ запускаем: сразу после выбора фаза меняется на
+  // 'prep', и текст на H/2-100 лёг бы поверх поля и карточек руки.
+  // Достаточно строки infoText («... — применено!»).
 }
 
 canvas.addEventListener('pointerdown', (e) => {
@@ -2419,7 +2469,14 @@ function handleTap(x, y) {
   }
   if (G.scene === 'over') {
     const ob = overBtnRect();
-    if (inRect(x, y, ob.x, ob.y, ob.w, ob.h)) { G.scene = 'game'; resetGame(); }
+    if (inRect(x, y, ob.x, ob.y, ob.w, ob.h)) { G.scene = 'game'; resetGame(); return; }
+    const mb = toMenuBtnRect();
+    if (inRect(x, y, mb.x, mb.y, mb.w, mb.h)) {
+      menuBtnPressed = 'menu';
+      setTimeout(() => { if (menuBtnPressed === 'menu') menuBtnPressed = null; }, 160);
+      G.scene = 'menu';
+      return;
+    }
     return;
   }
   if (G.phase === 'upgrade') {
@@ -3233,26 +3290,25 @@ function renderMenu() {
   // === общая деревянная панель — все элементы внутри, ничего не слипается ===
   drawWoodPanel(p.x, p.y, p.w, p.h, 26);
 
-  // === заголовок с градиентом и тенью ===
-  const titleY1 = p.y + (M.land ? 74 : 118);
+  // === заголовок с градиентом и тенью (позиции — из потока menuLayout) ===
   const lh = M.titleSize * 1.18;
-  ctx.font = `bold ${M.titleSize}px system-ui, -apple-system, sans-serif`;
+  ctx.font = `bold ${M.titleSize}px ${MENU_UI_FONT}`;
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillText('СЛАВЯНСКИЕ', W/2 + 3, titleY1 + 3);
-  ctx.fillText('КОРОНЫ', W/2 + 3, titleY1 + lh + 3);
-  const tg = ctx.createLinearGradient(0, titleY1 - M.titleSize * 0.6, 0, titleY1 + lh + M.titleSize * 0.6);
+  ctx.fillText('СЛАВЯНСКИЕ', W/2 + 3, M.titleY1 + 3);
+  ctx.fillText('КОРОНЫ', W/2 + 3, M.titleY1 + lh + 3);
+  const tg = ctx.createLinearGradient(0, M.titleY1 - M.titleSize * 0.6, 0, M.titleY1 + lh + M.titleSize * 0.6);
   tg.addColorStop(0, '#ffe9a8');
   tg.addColorStop(0.5, '#f1c40f');
   tg.addColorStop(1, '#c9971b');
   ctx.fillStyle = tg;
-  ctx.fillText('СЛАВЯНСКИЕ', W/2, titleY1);
-  ctx.fillText('КОРОНЫ', W/2, titleY1 + lh);
+  ctx.fillText('СЛАВЯНСКИЕ', W/2, M.titleY1);
+  ctx.fillText('КОРОНЫ', W/2, M.titleY1 + lh);
 
-  ctx.font = `${M.subtitleSize}px system-ui, -apple-system, sans-serif`;
+  ctx.font = `${M.subtitleSize}px ${MENU_UI_FONT}`;
   ctx.fillStyle = '#cbb894';
-  ctx.fillText('Защити Детинец от нечисти', W/2, titleY1 + lh * 2 + 20);
+  ctx.fillText('Защити Детинец от нечисти', W/2, M.subtitleY);
 
-  drawOrnament(W/2, titleY1 + lh * 2 + 50, 'rgba(241, 196, 15, 0.7)');
+  drawOrnament(W/2, M.ornamentY, 'rgba(241, 196, 15, 0.7)');
 
   // === витрина: боярин против беса ===
   const idleBob = Math.sin(G.time * 2.2) * 2;
@@ -3288,7 +3344,7 @@ function renderMenu() {
   }
 
   // === выбор сложности: три карточки ===
-  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.font = `bold ${M.labelSize}px ${MENU_UI_FONT}`;
   ctx.fillStyle = '#f1c40f';
   ctx.fillText('СЛОЖНОСТЬ', W/2, M.diffLabelY);
 
@@ -3325,17 +3381,19 @@ function renderMenu() {
     ctx.restore();
 
     // === текст карточки: название и описание целиком ВНУТРИ кнопки ===
+    // Шрифты — те же константы, что измерял menuLayout(), поэтому высота
+    // кнопки гарантированно покрывает отрисованный текст.
     const padX = 10;
-    let nameSize = 22, descSize = 15;
-    ctx.font = nameFont;
+    let nameSize = M.nameFontSize, descSize = M.descFontSize;
+    ctx.font = menuNameFont(nameSize);
     while (ctx.measureText(d.icon + ' ' + d.name.toUpperCase()).width > b.w - padX * 2 && nameSize > 14) {
       nameSize -= 1;
-      ctx.font = `bold ${nameSize}px system-ui, -apple-system, sans-serif`;
+      ctx.font = menuNameFont(nameSize);
     }
     const nameStr = d.icon + ' ' + d.name.toUpperCase();
 
     // перенос описания по словам под реальную ширину
-    ctx.font = descFont;
+    ctx.font = menuDescFont(descSize);
     const maxDescW = b.w - padX * 2;
     const descWords = d.desc.split(' ');
     let lines = [d.desc];
@@ -3351,11 +3409,11 @@ function renderMenu() {
       const l2 = descWords.slice(k).join(' ');
       lines = l2 ? [l1, l2] : [l1];
     }
-    // если вторая строка всё ещё длинная — уменьшаем кегль описания
-    let longestW = Math.max(...lines.map(s => { ctx.font = descFont; return ctx.measureText(s).width; }));
+    // если строка всё ещё длинная — уменьшаем кегль описания
+    let longestW = Math.max(...lines.map(s => { ctx.font = menuDescFont(descSize); return ctx.measureText(s).width; }));
     while (longestW > maxDescW && descSize > 11) {
       descSize -= 1;
-      ctx.font = `${descSize}px system-ui, -apple-system, sans-serif`;
+      ctx.font = menuDescFont(descSize);
       longestW = Math.max(...lines.map(s => ctx.measureText(s).width));
     }
 
@@ -3648,8 +3706,11 @@ function renderGame() {
 function drawUpgradeIndicators() {
   const entries = Object.entries(G.upgradeCount);
   if (entries.length === 0) return;
+  // Индикаторы взятых улучшений — в левом столбце под подписью сложности.
+  // Не задевают: «💰» (x≈40, hudY), сложность (hudY+34), строку инфо HUD
+  // (по центру/с координатой 400) и кнопки В БОЙ/реролл.
   ctx.textAlign = 'left';
-  let x = 40, y = LAYOUT.hudY + 35;
+  let x = 40, y = LAYOUT.hudY + 62;
   for (const [id, count] of entries) {
     const card = UPGRADE_CARDS.find(c => c.id === id);
     if (!card) continue;
@@ -3680,7 +3741,12 @@ function renderUpgradeScreen() {
 
   if (isLand) {
     const cardW = 380;
-    const cardH = 450;
+    // Высота карт подгоняется под экран: заголовок (до y≈140), 3 карты и
+    // подпись снизу — всё гарантированно в пределах H без наложений.
+    const bottomNoteH = 56;                 // место под «Тапни карту…» внизу
+    const availH = H - 180 - bottomNoteH;   // от startY до подписи
+    let cardH = Math.min(450, availH);
+    if (cardH < 240) cardH = 240;           // запасной минимум (на канвасе 810 не нужен)
     const gap = 30;
     const startX = (W - (cardW * 3 + gap * 2)) / 2;
     const startY = 180;
@@ -3988,51 +4054,93 @@ function drawHandCards() {
 }
 
 function renderOver() {
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 96px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = G.win ? '#27ae60' : '#c0392b';
-  ctx.fillText(G.win ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ', W/2, H/2 - 260);
-  ctx.font = '32px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#d5d8dc';
-  if (G.win) {
-    ctx.fillText('Все ' + MAX_WAVES + ' волн отбиты!', W/2, H/2 - 170);
-  } else {
-    ctx.fillText('Детинец пал на волне ' + G.wave, W/2, H/2 - 170);
-    ctx.font = '24px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#aab7b8';
-    ctx.fillText('Нечисть прорвалась через защиту', W/2, H/2 - 125);
-  }
-  if (G_DIFF) {
-    ctx.font = '26px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = G_DIFF.stroke;
-    ctx.fillText('Сложность: ' + G_DIFF.icon + ' ' + G_DIFF.name, W/2, H/2 - 85);
-  }
-  if (G.win) drawFigure('sword', W/2, H/2 + 20, 1, G.time, false, 0, false, 0, 1, 0);
-  else drawFigure('goblin', W/2, H/2 + 20, 1, G.time, false, 0, false, 0, 1, 0);
+  // Экран итогов — как меню: деревянная панель, поток элементов сверху вниз,
+  // ничего не вылезает за края и не наслаивается (кнопки — из overBtnRect/toMenuBtnRect).
+  const land = W > H;
+  const p = overPanelRect();
+  drawWoodPanel(p.x, p.y, p.w, p.h, 26);
 
+  ctx.textAlign = 'center';
+
+  // заголовок: подгоняем кегль под ширину панели, чтобы вписался гарантированно
+  let titleSize = land ? 56 : 68;
+  ctx.font = `bold ${titleSize}px system-ui, -apple-system, sans-serif`;
+  const titleText = G.win ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ';
+  while (ctx.measureText(titleText).width > p.w - 70 && titleSize > 30) {
+    titleSize -= 2;
+    ctx.font = `bold ${titleSize}px system-ui, -apple-system, sans-serif`;
+  }
+  const titleBase = p.y + 40 + titleSize * 0.85;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = G.win ? '#2ecc71' : '#e74c3c';
+  ctx.fillText(titleText, W / 2, titleBase);
+  ctx.restore();
+
+  // подзаголовок
+  let y = titleBase + 16;
+  ctx.font = `${land ? 22 : 26}px system-ui, -apple-system, sans-serif`;
+  ctx.fillStyle = '#d5d8dc';
+  const sub = G.win ? 'Все ' + MAX_WAVES + ' волн отбиты!' : 'Детинец пал на волне ' + G.wave;
+  ctx.fillText(sub, W / 2, y);
+
+  if (!G.win) {
+    y += 30;
+    ctx.font = `${land ? 18 : 20}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = '#aab7b8';
+    ctx.fillText('Нечисть прорвалась через защиту', W / 2, y);
+  }
+
+  y += 30;
+  if (G_DIFF) {
+    ctx.font = `bold ${land ? 20 : 22}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = G_DIFF.stroke;
+    ctx.fillText('Сложность: ' + G_DIFF.icon + ' ' + G_DIFF.name, W / 2, y);
+  }
+
+  const entries = Object.entries(G.upgradeCount);
+  if (entries.length > 0) {
+    y += 28;
+    ctx.font = `${land ? 18 : 20}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText('Взято карт улучшений: ' + entries.reduce((s, [, c]) => s + c, 0), W / 2, y);
+  }
+
+  // фигура-трофей: рисуется ПОСЛЕДНИМ текстовым блоком, перед кнопками,
+  // в свободной зоне между подписями и кнопкой «ЗАНОВО» — пересечений нет.
   const ob = overBtnRect();
+  const mb = toMenuBtnRect();
+  const figZoneTop = y + 24;
+  const figZoneBot = ob.y - 14;
+  if (figZoneBot - figZoneTop > 70) {
+    const fy = (figZoneTop + figZoneBot) / 2 + 34; // drawFigure рисует от «земли» вверх
+    const fs = Math.min(1.15, (figZoneBot - figZoneTop) / 150);
+    if (G.win) drawFigure('sword', W / 2, fy, fs, G.time, false, 0, false, 0, 1, 0);
+    else drawFigure('goblin', W / 2, fy, fs, G.time, false, 0, false, 0, 1, 0);
+  }
+
+  // === кнопка «ЗАНОВО» (главная) ===
   const g = ctx.createLinearGradient(ob.x, ob.y, ob.x, ob.y + ob.h);
   g.addColorStop(0, '#3d566e'); g.addColorStop(1, '#22303f');
   roundRect(ob.x, ob.y, ob.w, ob.h, 16); ctx.fillStyle = g; ctx.fill();
   ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3.5;
   roundRect(ob.x, ob.y, ob.w, ob.h, 16); ctx.stroke();
-  ctx.font = `bold ${Math.min(40, Math.floor(ob.h * 0.45))}px system-ui, -apple-system, sans-serif`;
+  ctx.font = `bold ${Math.min(36, Math.floor(ob.h * 0.45))}px system-ui, -apple-system, sans-serif`;
   ctx.fillStyle = '#ffe9a8';
-  ctx.fillText('ЗАНОВО', W/2, ob.y + ob.h/2);
+  ctx.fillText('ЗАНОВО', W / 2, ob.y + ob.h / 2 + 1);
 
-  const entries = Object.entries(G.upgradeCount);
-  if (entries.length > 0) {
-    ctx.font = '22px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#aab7b8';
-    // БЫЛО: by + bh + 50 — переменные не объявлены, ReferenceError крашил отрисовку экрана итогов
-    ctx.fillText('Взято карт: ' + entries.reduce((s, [, c]) => s + c, 0), W / 2, ob.y + ob.h + 46);
-  }
+  // === кнопка «В МЕНЮ» (второстепенная, ниже — не пересекается с «ЗАНОВО») ===
+  const mg = ctx.createLinearGradient(mb.x, mb.y, mb.x, mb.y + mb.h);
+  mg.addColorStop(0, '#2e2013'); mg.addColorStop(1, '#1c120c');
+  roundRect(mb.x, mb.y, mb.w, mb.h, 12); ctx.fillStyle = mg; ctx.fill();
+  ctx.strokeStyle = 'rgba(241, 196, 15, 0.55)'; ctx.lineWidth = 2;
+  roundRect(mb.x, mb.y, mb.w, mb.h, 12); ctx.stroke();
+  ctx.font = `bold ${Math.min(26, Math.floor(mb.h * 0.5))}px system-ui, -apple-system, sans-serif`;
+  ctx.fillStyle = '#d9c9a3';
+  ctx.fillText('В МЕНЮ', W / 2, mb.y + mb.h / 2 + 1);
 }
 
-resize();
-requestAnimationFrame(loop);
-
-/* === �������� ��� (��� headless-��������, ��������� � ��������) === */
+/* === экспорт для отладки (headless-проверок, безвредно в браузере) === */
 window.__tk = {
   menuLayout, overBtnRect, handleTap, resetGame, render, update, loop,
   get G() { return G; },
