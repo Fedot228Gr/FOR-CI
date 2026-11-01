@@ -4156,6 +4156,10 @@ window.__tk = {
   get ctx() { return ctx; }
 };
 
+/* === запуск игры: расчёт лэйаута + первый кадр цикла анимации === */
+resize();
+requestAnimationFrame(loop);
+
 })();
 </script>
 </body>
